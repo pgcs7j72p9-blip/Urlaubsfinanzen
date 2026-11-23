@@ -74,7 +74,8 @@ label{display:block;font-size:13px;color:#6b7280;margin-bottom:4px;font-weight:6
 .item .x{background:none;color:#ef4444;padding:4px 8px;font-size:16px}
 .it-g{background:#f0fdf4}.it-g.plan{background:#f3f4f6;color:#6b7280}
 .it-r{background:#fff7ed}.it-r.plan{background:#f3f4f6;color:#6b7280}
-.it-b{background:#eff6ff}
+.it-b{background:#eff6ff}.it-b.plan{background:#f3f4f6;color:#6b7280}
+.it-k{background:#fefce8}
 .mh{background:linear-gradient(90deg,#0ea5e9,#06b6d4);color:#fff;padding:12px 14px}
 .mh.fut{opacity:.65}
 .mh h3{display:flex;justify-content:space-between;align-items:center;font-size:17px}
@@ -153,14 +154,16 @@ function App() {
   const [expenses, setExpenses] = useState([]);
   const [deposits, setDeposits] = useState([]);
   const [recurring, setRecurring] = useState([]);
+  const [corrections, setCorrections] = useState([]);
   const [showBackup, setShowBackup] = useState(false);
-  const [editId, setEditId] = useState(null);
   const [backupText, setBackupText] = useState('');
+  const [editId, setEditId] = useState(null);
 
   const [nv, setNv] = useState({ destination: '', startDate: '', endDate: '', estimatedCost: '' });
   const [ne, setNe] = useState({ vacationId: '', description: '', amount: '', category: 'Pauschal', paymentDate: todayStr() });
-  const [nd, setNd] = useState({ month: curM, amount: '' });
+  const [nd, setNd] = useState({ month: curM, amount: '', description: '' });
   const [nr, setNr] = useState({ name: '', amount: '', interval: 'monthly', start: `${curY}-${pad(curM)}-01`, end: '' });
+  const [nk, setNk] = useState({ month: curM, actual: '', sign: '+', amount: '', description: '' });
 
   const applyData = d => {
     setMonthly(d.monthly ?? 1300);
@@ -169,6 +172,7 @@ function App() {
     setExpenses(d.expenses || []);
     setDeposits(d.deposits || []);
     setRecurring(d.recurring || []);
+    setCorrections(d.corrections || []);
   };
 
   useEffect(() => {
@@ -176,11 +180,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (loaded) saveData({ monthly, offYears, vacations, expenses, deposits, recurring });
-  }, [loaded, monthly, offYears, vacations, expenses, deposits, recurring]);
+    if (loaded) saveData({ monthly, offYears, vacations, expenses, deposits, recurring, corrections });
+  }, [loaded, monthly, offYears, vacations, expenses, deposits, recurring, corrections]);
 
   const exportData = () => {
-    setBackupText(JSON.stringify({ monthly, offYears, vacations, expenses, deposits, recurring }));
+    setBackupText(JSON.stringify({ monthly, offYears, vacations, expenses, deposits, recurring, corrections }));
     setShowBackup(true);
   };
   const importData = () => {
@@ -230,16 +234,15 @@ function App() {
   const monthIn = m => autoFor(year, m) + manualDeps(m).reduce((s, d) => s + d.amount, 0);
   const monthExpList = m => expenses.filter(e => e.year === year && e.month === m);
   const monthOut = m => monthExpList(m).reduce((s, e) => s + e.amount, 0) + recurAmt(year, m);
+  const monthCorr = m => corrections.filter(c => c.year === year && c.month === m);
 
   const yearIn = MONTHS.reduce((s, _, i) => s + monthIn(i + 1), 0);
   const yearOut = MONTHS.reduce((s, _, i) => s + monthOut(i + 1), 0);
   const yearRecur = MONTHS.reduce((s, _, i) => s + recurAmt(year, i + 1), 0);
   const yearRecurPlanned = MONTHS.reduce((s, _, i) => s + recurPlannedAmt(year, i + 1), 0);
-  const balance = yearIn - yearOut;
+  // Verfügbar (aktuell) = Einzahlungen − tatsächliche Ausgaben (wird weiter unten berechnet)
   const projIn = deposits.filter(d => d.year === year).reduce((s, d) => s + d.amount, 0) + (autoOn ? monthly * 12 : 0);
-  const projOut = expenses.filter(e => e.year === year).reduce((s, e) => s + e.amount, 0) + yearRecurPlanned;
-  const projBalance = projIn - projOut;
-  const catTotal = name => expenses.filter(e => e.year === year && e.category === name).reduce((s, e) => s + e.amount, 0);
+  const catTotal = name => expYear.filter(e => e.category === name).reduce((s, e) => s + e.amount, 0);
 
   const vacInMonth = m => {
     const ms = `${year}-${pad(m)}-01`, me = `${year}-${pad(m)}-31`;
@@ -250,9 +253,39 @@ function App() {
   const yearVacs = vacations.filter(v => v.startDate.slice(0, 4) === String(year)).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const estYear = yearVacs.reduce((s, v) => s + v.estimatedCost, 0);
   const actYear = yearVacs.reduce((s, v) => s + vacSpent(v.id), 0);
+  // Tatsächliche Ausgaben des angezeigten Jahres: alle erfassten Ausgaben der Urlaube dieses Jahres + gebuchte laufende Kosten
+  const vacYearOf = e => { const v = vacations.find(x => x.id === e.vacationId); return v ? v.startDate.slice(0, 4) : String(e.year); };
+  const expYear = expenses.filter(e => vacYearOf(e) === String(year));
+  const actualOut = expYear.reduce((s, e) => s + e.amount, 0) + yearRecur;
+  const balance = yearIn - actualOut;
   // Prognose Jahresende: pro Urlaub der höhere Wert aus Schätzung und tatsächlichen Kosten + alle laufenden Kosten des Jahres
   const projVacYear = yearVacs.reduce((s, v) => s + Math.max(v.estimatedCost, vacSpent(v.id)), 0);
   const projExpYear = projVacYear + yearRecurPlanned;
+
+  // Kontostand: fortlaufend ab dem ersten Jahr mit Einträgen
+  const dataYears = [
+    ...deposits.map(d => d.year),
+    ...expenses.map(e => e.year),
+    ...corrections.map(c => c.year),
+    ...vacations.map(v => parseInt(v.startDate.slice(0, 4))),
+    ...recurring.map(r => parseInt(r.start.slice(0, 4))),
+  ].filter(Number.isFinite);
+  const startYear = dataYears.length ? Math.min(...dataYears) : year;
+  const netFor = (y, m) => {
+    const auto = offYears.includes(y) ? 0 : monthly;
+    const dep = deposits.filter(d => d.year === y && d.month === m).reduce((s, d) => s + d.amount, 0);
+    const cor = corrections.filter(c => c.year === y && c.month === m).reduce((s, c) => s + c.amount, 0);
+    const exp = expenses.filter(e => e.year === y && e.month === m).reduce((s, e) => s + e.amount, 0);
+    return auto + dep + cor - exp - recurPlannedAmt(y, m);
+  };
+  const balanceAt = (y, m) => {
+    let s = 0;
+    for (let yy = Math.min(startYear, y); yy <= y; yy++) {
+      const last = yy === y ? m : 12;
+      for (let mm = 1; mm <= last; mm++) s += netFor(yy, mm);
+    }
+    return Math.round(s * 100) / 100;
+  };
 
   const upcoming = (() => {
     const t = todayStr();
@@ -299,10 +332,24 @@ function App() {
     setRecurring([...recurring, { id: Date.now(), name: nr.name, amount: parseFloat(nr.amount), interval: nr.interval, start: nr.start.slice(0, 7), end: nr.end ? nr.end.slice(0, 7) : '' }]);
     setNr({ ...nr, name: '', amount: '', end: '' });
   };
+  const fillDiff = () => {
+    if (nk.actual === '') return alert('Bitte zuerst den tatsächlichen Kontostand eingeben.');
+    const diff = Math.round((parseFloat(nk.actual) - balanceAt(year, parseInt(nk.month))) * 100) / 100;
+    if (!Number.isFinite(diff)) return alert('Ungültiger Betrag.');
+    setNk({ ...nk, sign: diff >= 0 ? '+' : '-', amount: String(Math.abs(diff)) });
+  };
+  const addCorrection = () => {
+    const a = parseFloat(nk.amount);
+    if (!a) return alert('Bitte einen Korrekturbetrag eingeben.');
+    const amount = nk.sign === '-' ? -Math.abs(a) : Math.abs(a);
+    setCorrections([...corrections, { id: Date.now(), year, month: parseInt(nk.month), amount, description: (nk.description || '').trim() }]);
+    setNk({ ...nk, actual: '', amount: '', description: '' });
+  };
   const delVacation = id => { if (confirm('Urlaub und alle zugehörigen Ausgaben löschen?')) { setVacations(vacations.filter(v => v.id !== id)); setExpenses(expenses.filter(e => e.vacationId !== id)); } };
   const delExpense = id => setExpenses(expenses.filter(e => e.id !== id));
   const delDeposit = id => setDeposits(deposits.filter(d => d.id !== id));
   const delRecurring = id => { if (confirm('Laufende Kosten löschen?')) setRecurring(recurring.filter(r => r.id !== id)); };
+  const delCorrection = id => setCorrections(corrections.filter(c => c.id !== id));
 
   const fmtYM = s => { if (!s) return ''; const [y, m] = s.split('-'); return `${m}.${y}`; };
 
@@ -322,6 +369,17 @@ function App() {
     );
   };
 
+  const CorrectionItem = ({ c, showMonth }) => (
+    <div className="item it-k">
+      <div className="t">
+        <p>🛠️ {c.description || 'Korrektur'}</p>
+        <small>{showMonth ? MONTHS[c.month - 1] + ' • ' : ''}Korrekturbetrag</small>
+      </div>
+      <span className={'amt ' + (c.amount >= 0 ? 'pos' : 'neg')}>{c.amount >= 0 ? '+ ' : '- '}{eur(Math.abs(c.amount))}</span>
+      <button className="x" onClick={() => delCorrection(c.id)}>🗑️</button>
+    </div>
+  );
+
   return (
     <div className="wrap">
       <div className="card">
@@ -335,30 +393,30 @@ function App() {
         </div>
 
         <div className="tabs">
-          {[['overview','Übersicht'],['vacations','Urlaube'],['calendar','Kalender'],['deposits','Einzahlungen'],['recurring','Laufende Kosten']].map(([k, l]) => (
+          {[['overview','Übersicht'],['vacations','Urlaube'],['calendar','Kalender'],['deposits','Einzahlungen'],['recurring','Laufende Kosten'],['balance','Kontostand']].map(([k, l]) => (
             <button key={k} className={'tab' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>
 
         {tab === 'overview' && (<>
           <div className="grid g3" style={{ marginBottom: 16 }}>
-            <div className="stat s-green">
-              <small>Einzahlungen (bisher)</small>
-              <b>{eur(yearIn)}</b>
-              {year >= curY && autoOn && <i>Prognose Jahresende: {eur(projIn)}</i>}
+            <div className={'stat ' + (balanceAt(curY, curM) >= 0 ? 's-green' : 's-orange')}>
+              <small>Kontostand aktuell</small>
+              <b>{eur(balanceAt(curY, curM))}</b>
+              <i>Stand Ende {MONTHS[curM - 1]} {curY}</i>
+              <i>Prognose Jahresende {year}: {eur(balanceAt(year, 12))}</i>
             </div>
             <div className="stat s-red">
-              <small>Ausgaben</small>
-              <b>{eur(yearOut)}</b>
+              <small>Ausgaben tatsächlich {year}</small>
+              <b>{eur(actualOut)}</b>
               {yearRecur > 0 && <i>davon laufende Kosten: {eur(yearRecur)}</i>}
               {projExpYear > 0 && <i>Prognose Jahresende: {eur(projExpYear)}</i>}
               {projExpYear > 0 && <i style={{ opacity: .75 }}>(je Urlaub der höhere Wert aus Schätzung und tatsächlich + laufende Kosten)</i>}
             </div>
-            <div className={'stat ' + (balance >= 0 ? 's-blue' : 's-orange')}>
-              <small>Verfügbar (aktuell)</small>
-              <b>{eur(balance)}</b>
-              {year >= curY && (autoOn || projExpYear > 0) && <i>Prognose Jahresende: {eur(projIn - projExpYear)}</i>}
-              {year >= curY && (autoOn || projExpYear > 0) && <i style={{ opacity: .75 }}>(Einzahlungen {eur(projIn)} − Ausgaben {eur(projExpYear)})</i>}
+            <div className={'stat ' + (projIn - projExpYear >= 0 ? 's-blue' : 's-orange')}>
+              <small>Verfügbar Jahresende {year}</small>
+              <b>{eur(projIn - projExpYear)}</b>
+              <i>Einzahlungen {eur(projIn)} − Ausgaben {eur(projExpYear)}</i>
             </div>
           </div>
 
@@ -509,7 +567,9 @@ function App() {
               const el = monthExpList(m);
               const dl = manualDeps(m);
               const due = recurDueIn(year, m);
-              const nothing = vs.length === 0 && el.length === 0 && dl.length === 0 && due.length === 0 && !autoOn;
+              const kl = monthCorr(m);
+              const ks = balanceAt(year, m);
+              const nothing = vs.length === 0 && el.length === 0 && dl.length === 0 && due.length === 0 && kl.length === 0 && !autoOn;
               return (
                 <div className="vc" key={m}>
                   <div className={'mh' + (planned ? ' fut' : '')}>
@@ -517,6 +577,7 @@ function App() {
                     <div className="l">+ {eur(inn)}</div>
                     <div className="l">- {eur(out)}</div>
                     <div className="tot">{eur(bal)}</div>
+                    <div className="l" style={{ marginTop: 8, fontSize: 14 }}>🏦 {planned ? 'Prognose-Kontostand' : 'Kontostand'}: <b>{eur(ks)}</b></div>
                   </div>
                   <div className="mb">
                     {nothing && <p style={{ color: '#9ca3af', fontSize: 13, fontStyle: 'italic' }}>Keine Einträge</p>}
@@ -553,6 +614,9 @@ function App() {
 
                     {el.length > 0 && <><h4>💸 Ausgaben</h4>
                       {el.map(e => <ExpenseItem key={e.id} e={e} showVac />)}</>}
+
+                    {kl.length > 0 && <><h4>🛠️ Korrekturen</h4>
+                      {kl.map(c => <CorrectionItem key={c.id} c={c} />)}</>}
                   </div>
                 </div>
               );
@@ -691,6 +755,87 @@ function App() {
               );
             })}
             {yearRecurPlanned === 0 && <p style={{ color: '#9ca3af', fontSize: 13, fontStyle: 'italic' }}>Keine laufenden Kosten in {year}</p>}
+          </div>
+        </>)}
+
+        {tab === 'balance' && (<>
+          <div className="grid g3" style={{ marginBottom: 16 }}>
+            <div className="stat s-blue">
+              <small>Kontostand aktuell</small>
+              <b>{eur(balanceAt(curY, curM))}</b>
+              <i>Stand Ende {MONTHS[curM - 1]} {curY}</i>
+            </div>
+            <div className="stat s-green">
+              <small>Prognose Ende {year}</small>
+              <b>{eur(balanceAt(year, 12))}</b>
+              <i>inkl. geplanter Einzahlungen und laufender Kosten</i>
+            </div>
+          </div>
+
+          <div className="box bx-blue">
+            <h2>🛠️ Korrekturbetrag eingeben</h2>
+            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 10 }}>Der Kontostand wird fortlaufend aus Einzahlungen, Ausgaben und laufenden Kosten berechnet. Mit einer Korrektur gleichst du ihn an deinen echten Kontostand an.</p>
+            <div className="f2">
+              <div>
+                <label>Monat ({year})</label>
+                <select value={nk.month} onChange={e => setNk({ ...nk, month: e.target.value })}>
+                  {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label>Berechnet (Monatsende)</label>
+                <div className="mini" style={{ background: '#fff', border: '1px solid #d1d5db' }}><b>{eur(balanceAt(year, parseInt(nk.month)))}</b></div>
+              </div>
+            </div>
+            <div className="f2">
+              <div>
+                <label>Tatsächlicher Kontostand (optional)</label>
+                <input type="number" inputMode="decimal" step="0.01" placeholder="laut Konto" value={nk.actual} onChange={e => setNk({ ...nk, actual: e.target.value })} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <button className="b-gray" style={{ width: '100%' }} onClick={fillDiff}>Differenz berechnen</button>
+              </div>
+            </div>
+            <div className="f2">
+              <div>
+                <label>Korrektur</label>
+                <select value={nk.sign} onChange={e => setNk({ ...nk, sign: e.target.value })}>
+                  <option value="+">Erhöhen (+)</option>
+                  <option value="-">Verringern (−)</option>
+                </select>
+              </div>
+              <div>
+                <label>Korrekturbetrag (€)</label>
+                <input type="number" inputMode="decimal" step="0.01" placeholder="Betrag" value={nk.amount} onChange={e => setNk({ ...nk, amount: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <input type="text" placeholder="Beschreibung (z. B. Abgleich mit Kontoauszug)" value={nk.description} onChange={e => setNk({ ...nk, description: e.target.value })} />
+            </div>
+            <button className="b-blue" style={{ width: '100%' }} onClick={addCorrection}>➕ Korrektur speichern</button>
+          </div>
+
+          <div className="box bx-gray">
+            <h2>Kontostand nach Monaten {year}</h2>
+            {MONTHS.map((name, i) => {
+              const m = i + 1;
+              const planned = isPlanned(m);
+              const kl = monthCorr(m);
+              const ks = balanceAt(year, m);
+              const change = netFor(year, m);
+              return (
+                <div key={m}>
+                  <div className={'item it-b' + (planned ? ' plan' : '')}>
+                    <div className="t">
+                      <p>{name}</p>
+                      <small>{planned ? 'Prognose' : 'Monatsende'} • Veränderung {change >= 0 ? '+' : '-'} {eur(Math.abs(change))}</small>
+                    </div>
+                    <span className={'amt ' + (planned ? '' : (ks >= 0 ? 'pos' : 'neg'))}>{eur(ks)}</span>
+                  </div>
+                  {kl.map(c => <CorrectionItem key={c.id} c={c} />)}
+                </div>
+              );
+            })}
           </div>
         </>)}
       </div>
