@@ -1,4 +1,4 @@
-# Urlaubsfinanzen# 🏖️ Urlaubsfinanzen
+🏖️ Urlaubsfinanzen
 
 Eine einfache Web-App zur Planung und Verwaltung der Urlaubsfinanzen. Sie zeigt eine Jahresübersicht, aufgeteilt in Monate, mit Einzahlungen, Ausgaben, laufenden Kosten und Prognosen zum Jahresende.
 
